@@ -1,0 +1,6 @@
+@GBEMiddlewareApi_HostAddress = http://localhost:5014
+
+GET {{GBEMiddlewareApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
