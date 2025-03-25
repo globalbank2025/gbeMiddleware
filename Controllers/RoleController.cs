@@ -5,6 +5,7 @@ using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using GBEMiddlewareApi.Models;
 using GBEMiddlewareApi.Data;
+using Microsoft.AspNetCore.Authorization;
 
 namespace GBEMiddlewareApi.Controllers
 {
@@ -14,6 +15,7 @@ namespace GBEMiddlewareApi.Controllers
     /// as well as endpoints to create permissions, list all permissions, and assign or remove
     /// permissions from roles.
     /// </summary>
+    [Authorize] // Requires authentication for all endpoints
     [ApiController]
     [Route("api/[controller]")]
     public class RoleController : ControllerBase
@@ -121,16 +123,15 @@ namespace GBEMiddlewareApi.Controllers
             return Ok(new string[] { "Role removed successfully" });
         }
 
-        /// <summary>
-        /// POST: api/Role/create
-        /// Creates a new role.
-        /// Expected payload: { "roleName": "NewRole" }
-        /// </summary>
-        /// <param name="dto">An object containing the new role's name.</param>
-        /// <returns>Status message regarding the creation.</returns>
+
         [HttpPost("create")]
         public async Task<IActionResult> CreateRole([FromBody] CreateRoleDto dto)
         {
+            var userPermissions = User.Claims.Where(c => c.Type == "Permission").Select(c => c.Value).ToList();
+
+            if (!userPermissions.Contains("User_management"))
+                return StatusCode(403, new { error = "Access denied. You do not have permission to create roles." });
+
             if (dto == null || string.IsNullOrWhiteSpace(dto.RoleName))
                 return BadRequest(new string[] { "Role name is required." });
 
@@ -356,6 +357,36 @@ namespace GBEMiddlewareApi.Controllers
             return Ok(new string[] { "Permission deleted successfully." });
         }
 
+        // Get All roles With Permission
+        [HttpGet("roles-with-permissions")]
+        public async Task<IActionResult> GetRolesWithPermissions()
+        {
+            // Retrieve all roles from Identity
+            var roles = await _roleManager.Roles.ToListAsync();
+
+            // Retrieve all role-permission relationships including permission details
+            var rolePermissions = await _dbContext.RolePermissions
+                .Include(rp => rp.Permission)
+                .ToListAsync();
+
+            // Combine roles with their associated permissions
+            var result = roles.Select(role => new
+            {
+                role.Id,
+                role.Name,
+                Permissions = rolePermissions
+                    .Where(rp => rp.RoleId == role.Id)
+                    .Select(rp => new
+                    {
+                        rp.Permission.Id,
+                        rp.Permission.Name,
+                        rp.Permission.Description
+                    })
+                    .ToList()
+            });
+
+            return Ok(result);
+        }
 
         /// <summary>
         /// GET: api/Role/permissions/simple

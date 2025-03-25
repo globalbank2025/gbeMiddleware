@@ -4,11 +4,13 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using GBEMiddlewareApi.Data;
 using GBEMiddlewareApi.Models;
+using Microsoft.AspNetCore.Authorization;
 
 namespace GBEMiddlewareApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize] // Requires authentication for all endpoints
     public class ServiceEndpointController : ControllerBase
     {
         private readonly MiddlewareDbContext _context;

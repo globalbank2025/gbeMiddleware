@@ -2,11 +2,13 @@
 using GBEMiddlewareApi.Data;
 using GBEMiddlewareApi.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authorization;
 
 namespace GBEMiddlewareApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize] // Requires authentication for all endpoints
     public class ServiceIncomeGlController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
@@ -39,6 +41,17 @@ namespace GBEMiddlewareApi.Controllers
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] ServiceIncomeGl model)
         {
+            // 🔹 Extract permissions from JWT claims
+            var userPermissions = User.Claims
+                .Where(c => c.Type == "Permission")
+                .Select(c => c.Value)
+                .ToList();
+
+            // 🔹 Check if the user has "VatCollection_Create" permission
+            if (!userPermissions.Contains("CanManageSystemSettings"))
+            {
+                return StatusCode(403, new { error = "Access denied. You do not have permission to create Service GL." });
+            }
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using GBEMiddlewareApi.Data;
 using Microsoft.EntityFrameworkCore;
 using GBEMiddlewareApi.Models;
+using System.Security.Claims;
 
 namespace GBEMiddlewareApi.Security
 {
@@ -13,48 +14,50 @@ namespace GBEMiddlewareApi.Security
         private readonly UserManager<ApplicationUser> _userManager;
         private readonly ApplicationDbContext _dbContext;
 
-        public PermissionAuthorizationHandler(UserManager<ApplicationUser> userManager,
-                                             ApplicationDbContext dbContext)
+        public PermissionAuthorizationHandler(UserManager<ApplicationUser> userManager, ApplicationDbContext dbContext)
         {
             _userManager = userManager;
             _dbContext = dbContext;
         }
 
-        protected override async Task HandleRequirementAsync(
-            AuthorizationHandlerContext context,
-            PermissionRequirement requirement)
+        protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
         {
             if (!context.User.Identity.IsAuthenticated)
             {
-                // User is not logged in => fail
-                return;
+                return; // User is not authenticated
             }
 
-            // Get the user from database
             var user = await _userManager.GetUserAsync(context.User);
             if (user == null)
             {
-                // Could not find user => fail
-                return;
+                return; // No user found
             }
 
-            // Get all roles of this user
             var userRoles = await _userManager.GetRolesAsync(user);
-            if (userRoles == null || !userRoles.Any())
+            if (!userRoles.Any())
             {
-                return; // no roles => no permissions
+                return; // User has no roles assigned
             }
 
-            // Check if any of the user's roles has the required permission
-            var hasPermission = await _dbContext.RolePermissions
-                .Include(rp => rp.Permission)
-                .Include(rp => rp.Role)
-                .AnyAsync(rp =>
-                     userRoles.Contains(rp.Role.Name)
-                     && rp.Permission.Name == requirement.PermissionName
-                );
+            var userPermissions = await (
+                from rp in _dbContext.RolePermissions
+                join p in _dbContext.Permissions on rp.PermissionId equals p.Id
+                join r in _dbContext.Roles on rp.RoleId equals r.Id
+                where userRoles.Contains(r.Name)
+                select p.Name
+            ).Distinct().ToListAsync();
 
-            if (hasPermission)
+            // Add permissions as claims
+            var claimsIdentity = context.User.Identity as ClaimsIdentity;
+            if (claimsIdentity != null)
+            {
+                foreach (var permission in userPermissions)
+                {
+                    claimsIdentity.AddClaim(new Claim("Permission", permission));
+                }
+            }
+
+            if (userPermissions.Contains(requirement.PermissionName))
             {
                 context.Succeed(requirement);
             }

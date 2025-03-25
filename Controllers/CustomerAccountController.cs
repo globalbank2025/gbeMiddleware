@@ -20,6 +20,8 @@ namespace GBEMiddlewareApi.Controllers
     [Route("api/[controller]")]
     [ApiController]
     [PortalOrApiKeyAuth] // Ensures either portal user or valid API key
+    [Authorize] // Requires authentication for all endpoints
+
     public class CustomerAccountController : ControllerBase
     {
         private readonly IHttpClientFactory _httpClientFactory;
@@ -350,12 +352,16 @@ namespace GBEMiddlewareApi.Controllers
         //[Authorize(Policy = "VatCollection_Create")]
         public async Task<IActionResult> CreateVatCollectionTransaction([FromBody] VatCollectionTransactionDto dto)
         {
-            // Manually check if the current user has the "VatCollection_Create" permission.
-            var authResult = await _authorizationService.AuthorizeAsync(User, null, "VatCollection_Create");
-            if (!authResult.Succeeded)
+            // 🔹 Extract permissions from JWT claims
+            var userPermissions = User.Claims
+                .Where(c => c.Type == "Permission")
+                .Select(c => c.Value)
+                .ToList();
+
+            // 🔹 Check if the user has "VatCollection_Create" permission
+            if (!userPermissions.Contains("Can_create_vat"))
             {
-                // Return a custom error message with 403 Forbidden.
-                return StatusCode(403, new { error = "Access denied. You do not have permission to create VAT collection transactions." });
+                return StatusCode(403, new { error = "Access denied. You do not have permission to Collect Vat." });
             }
             if (dto == null || string.IsNullOrEmpty(dto.AccountNumber))
             {
@@ -424,9 +430,22 @@ namespace GBEMiddlewareApi.Controllers
         // (6) Approve & Delete
         // ====================================================================
         [HttpPut("vat-collection/{id}/approve")]
-        [Authorize(Policy = "VatCollection_Approve")]
         public async Task<IActionResult> ApproveVatCollectionTransaction(int id)
         {
+            // 🔹 Extract permissions from JWT claims
+            var userPermissions = User.Claims
+                .Where(c => c.Type == "Permission")
+                .Select(c => c.Value)
+                .ToList();
+
+            // 🔹 Check if the user has "VatCollection_Create" permission
+            if (!userPermissions.Contains("Can_vat_approval"))
+            {
+                return StatusCode(403, new { error = "Access denied. You do not have permission Approve Vat Collection." });
+            }
+
+
+
             var pending = await _dbContext.VatCollectionTransactions
                 .FirstOrDefaultAsync(x => x.Id == id && x.Status == "PENDING");
 
@@ -567,6 +586,7 @@ namespace GBEMiddlewareApi.Controllers
         [HttpDelete("vat-collection/{id}")]
         public async Task<IActionResult> DeleteVatCollectionTransaction(int id)
         {
+            
             var record = await _dbContext.VatCollectionTransactions.FindAsync(id);
             if (record == null)
             {
@@ -699,6 +719,18 @@ namespace GBEMiddlewareApi.Controllers
         [HttpPut("vat-collection/{id}/reject")]
         public async Task<IActionResult> RejectVatCollectionTransaction(int id)
         {
+            // 🔹 Extract permissions from JWT claims
+            var userPermissions = User.Claims
+                .Where(c => c.Type == "Permission")
+                .Select(c => c.Value)
+                .ToList();
+
+            // 🔹 Check if the user has "VatCollection_Create" permission
+            if (!userPermissions.Contains("CanRejectTransactions"))
+            {
+                return StatusCode(403, new { error = "Access denied. You do not have permission to Reject Transaction." });
+            }
+
             var pending = await _dbContext.VatCollectionTransactions
                 .FirstOrDefaultAsync(x => x.Id == id && x.Status == "PENDING");
 
@@ -722,6 +754,17 @@ namespace GBEMiddlewareApi.Controllers
         [HttpGet("transaction-logs")]
         public async Task<IActionResult> GetAllTransactionLogs()
         {
+            // 🔹 Extract permissions from JWT claims
+            var userPermissions = User.Claims
+                .Where(c => c.Type == "Permission")
+                .Select(c => c.Value)
+                .ToList();
+
+            // 🔹 Check if the user has "VatCollection_Create" permission
+            if (!userPermissions.Contains("CanViewLogs"))
+            {
+                return StatusCode(403, new { error = "Access denied. You do not have access to view Log." });
+            }
             try
             {
                 var logs = await _dbContext.TransactionLogs

@@ -4,7 +4,7 @@ namespace GBEMiddlewareApi.Security
 {
     public class PermissionRequirement : IAuthorizationRequirement
     {
-        public string PermissionName { get; set; }
+        public string PermissionName { get; }
 
         public PermissionRequirement(string permissionName)
         {

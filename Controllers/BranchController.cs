@@ -6,24 +6,23 @@ using GBEMiddlewareApi.Data;
 using GBEMiddlewareApi.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
+using System.Linq;
+using System.Security.Claims;
 
 namespace GBEMiddlewareApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize]
+    [Authorize] // Requires authentication for all endpoints
     public class BranchController : ControllerBase
     {
-        private readonly ApplicationDbContext _context; // Branch is managed via ApplicationDbContext
-        private readonly IAuthorizationService _authorizationService;
+        private readonly ApplicationDbContext _context;
         private readonly UserManager<ApplicationUser> _userManager;
 
-        public BranchController(ApplicationDbContext context, UserManager<ApplicationUser> userManager,IAuthorizationService authorizationService)
+        public BranchController(ApplicationDbContext context, UserManager<ApplicationUser> userManager)
         {
             _context = context;
-            _authorizationService = authorizationService;
             _userManager = userManager;
-
         }
 
         // GET: api/branch
@@ -47,26 +46,23 @@ namespace GBEMiddlewareApi.Controllers
         [HttpPost]
         public async Task<ActionResult<Branch>> CreateBranch(Branch branch)
         {
-            // Check permission manually using the authorization service.
-            var authResult = await _authorizationService.AuthorizeAsync(User, null, "test");
-            if (!authResult.Succeeded)
-            {
-                // Retrieve the current user and get their roles.
-                var user = await _userManager.GetUserAsync(User);
-                var roles = await _userManager.GetRolesAsync(user);
+            // 🔹 Extract permissions from JWT claims
+            var userPermissions = User.Claims
+                .Where(c => c.Type == "Permission")
+                .Select(c => c.Value)
+                .ToList();
 
-                // Return a detailed error including the user roles.
-                return StatusCode(403, new
-                {
-                    error = "Access denied. You do not have permission to create Branch.",
-                    userRoles = roles
-                });
+            // 🔹 Check if the user has "VatCollection_Create" permission
+            if (!userPermissions.Contains("CanManageSystemSettings"))
+            {
+                return StatusCode(403, new { error = "Access denied. You do not have permission to create branch." });
             }
 
             _context.Branches.Add(branch);
             await _context.SaveChangesAsync();
             return CreatedAtAction(nameof(GetBranch), new { id = branch.BranchId }, branch);
         }
+
 
         // PUT: api/branch/5
         [HttpPut("{id}")]

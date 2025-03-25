@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -10,28 +10,49 @@ using Microsoft.AspNetCore.Authorization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Register your custom authorization handler
+// ----------------------------------------------------------------
+//  Register Authorization Services & Policies
+// ----------------------------------------------------------------
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
-// Register authorization policies
 builder.Services.AddAuthorization(options =>
 {
-    // Policy for creating VAT collection transactions (Maker permission)
-    options.AddPolicy("test", policy =>
-        policy.Requirements.Add(new PermissionRequirement("test")));
-    // Policy for creating VAT collection transactions (Maker permission)
-    options.AddPolicy("VatCollection_Create", policy =>
-        policy.Requirements.Add(new PermissionRequirement("VatCollection_Create")));
+    options.AddPolicy("Can_create_vat", policy =>
+        policy.Requirements.Add(new PermissionRequirement("Can_create_vat")));
 
-    // Policy for approving VAT collection transactions (Checker permission)
-    options.AddPolicy("VatCollection_Approve", policy =>
-        policy.Requirements.Add(new PermissionRequirement("VatCollection_Approve")));
+    options.AddPolicy("Can_vat_approval", policy =>
+        policy.Requirements.Add(new PermissionRequirement("Can_vat_approval")));
+
+    options.AddPolicy("CanManageUsers", policy =>
+        policy.Requirements.Add(new PermissionRequirement("CanManageUsers")));
+
+    options.AddPolicy("CanManageRoles", policy =>
+        policy.Requirements.Add(new PermissionRequirement("CanManageRoles")));
+
+    options.AddPolicy("CanManageSystemSettings", policy =>
+        policy.Requirements.Add(new PermissionRequirement("CanManageSystemSettings")));
+
+    options.AddPolicy("CanViewLogs", policy =>
+        policy.Requirements.Add(new PermissionRequirement("CanViewLogs")));
+
+    options.AddPolicy("CanManageSystemSettings", policy =>
+        policy.Requirements.Add(new PermissionRequirement("CanManageSystemSettings")));
+
+    options.AddPolicy("CanCreateTransactions", policy =>
+        policy.Requirements.Add(new PermissionRequirement("CanCreateTransactions")));
+
+    options.AddPolicy("CanApproveTransactions", policy =>
+        policy.Requirements.Add(new PermissionRequirement("CanApproveTransactions")));
+
+    options.AddPolicy("CanRejectTransactions", policy =>
+        policy.Requirements.Add(new PermissionRequirement("CanRejectTransactions")));
+
+    //options.AddPolicy("CanRejectTransactions", policy =>
+    //   policy.Requirements.Add(new PermissionRequirement("CanRejectTransactions")));
 });
 
 // ----------------------------------------------------------------
-// Add CORS service and define a policy to allow Angular and Swagger.
-// For development, we're using AllowAnyOrigin. In production, consider
-// specifying exact origins for security.
+//  Configure CORS
 // ----------------------------------------------------------------
 builder.Services.AddCors(options =>
 {
@@ -44,22 +65,17 @@ builder.Services.AddCors(options =>
 });
 
 // ----------------------------------------------------------------
-// Configure connection strings and JWT settings
+//  Configure Database & Identity Services
 // ----------------------------------------------------------------
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-var jwtSettings = builder.Configuration.GetSection("JWT");
-var jwtSecret = jwtSettings["Secret"];
-var key = Encoding.UTF8.GetBytes(jwtSecret);
 
-// ----------------------------------------------------------------
-// Register ApplicationDbContext for Identity (using ApplicationUser)
-// ----------------------------------------------------------------
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
+// Register MiddlewareDbContext (this fixes your PartnerController issue)
 
-// ----------------------------------------------------------------
-// Register Identity with ApplicationUser and IdentityRole
-// ----------------------------------------------------------------
+builder.Services.AddDbContext<MiddlewareDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
     options.Password.RequiredLength = 6;
@@ -69,14 +85,12 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 .AddDefaultTokenProviders();
 
 // ----------------------------------------------------------------
-// Register MiddlewareDbContext for common data tables (if needed)
+//  Configure JWT Authentication & Token Validation
 // ----------------------------------------------------------------
-builder.Services.AddDbContext<MiddlewareDbContext>(options =>
-    options.UseNpgsql(connectionString));
+var jwtSettings = builder.Configuration.GetSection("JWT");
+var jwtSecret = jwtSettings["Secret"];
+var key = Encoding.UTF8.GetBytes(jwtSecret);
 
-// ----------------------------------------------------------------
-// Configure JWT Authentication
-// ----------------------------------------------------------------
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -99,54 +113,30 @@ builder.Services.AddAuthentication(options =>
 });
 
 // ----------------------------------------------------------------
-// Register HttpClient so it can be injected into controllers
-// ----------------------------------------------------------------
-builder.Services.AddHttpClient();
-
-// ----------------------------------------------------------------
-// Register controllers and Swagger
+//  Register Controllers & Swagger
 // ----------------------------------------------------------------
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+builder.Services.AddHttpClient();
+
+// ----------------------------------------------------------------
+//  Build & Configure Middleware Pipeline
+// ----------------------------------------------------------------
 var app = builder.Build();
 
-// ----------------------------------------------------------------
-// Use static files (if any)
-// ----------------------------------------------------------------
 app.UseStaticFiles();
-
-// ----------------------------------------------------------------
-// Use CORS with the defined policy. This MUST be placed before
-// UseAuthentication/UseAuthorization.
-// ----------------------------------------------------------------
 app.UseCors("AllowAngularAndSwagger");
-
-// ----------------------------------------------------------------
-// Enable Swagger (consider securing Swagger in production)
-// ----------------------------------------------------------------
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1");
-    c.RoutePrefix = string.Empty; // Swagger UI will appear at the root URL.
+    c.RoutePrefix = string.Empty;
 });
 
-// ----------------------------------------------------------------
-// Enforce HTTPS redirection
-// ----------------------------------------------------------------
 app.UseHttpsRedirection();
-
-// ----------------------------------------------------------------
-// Use Authentication and Authorization
-// ----------------------------------------------------------------
 app.UseAuthentication();
 app.UseAuthorization();
-
-// ----------------------------------------------------------------
-// Map controller endpoints
-// ----------------------------------------------------------------
 app.MapControllers();
-
 app.Run();

@@ -34,7 +34,6 @@ namespace GBEMiddlewareApi.Controllers
         }
 
         // POST: api/auth/register
-        // Only an Admin can register new users.
         [Authorize(Roles = "Admin")]
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterUserDto model)
@@ -46,24 +45,22 @@ namespace GBEMiddlewareApi.Controllers
             {
                 UserName = model.Email,
                 Email = model.Email,
-                BranchId = model.BranchId  // Branch selected during registration
+                BranchId = model.BranchId
             };
 
             var result = await _userManager.CreateAsync(user, model.Password);
             if (!result.Succeeded)
             {
-                var errors = result.Errors.Select(e => e.Description);
-                return BadRequest(new { Errors = errors });
+                return BadRequest(new { Errors = result.Errors.Select(e => e.Description) });
             }
 
-            // If a role is provided, assign it to the user.
+            // Assign role if provided
             if (!string.IsNullOrEmpty(model.Role))
             {
                 var roleResult = await _userManager.AddToRoleAsync(user, model.Role);
                 if (!roleResult.Succeeded)
                 {
-                    var errors = roleResult.Errors.Select(e => e.Description);
-                    return BadRequest(new { Errors = errors });
+                    return BadRequest(new { Errors = roleResult.Errors.Select(e => e.Description) });
                 }
             }
 
@@ -71,124 +68,52 @@ namespace GBEMiddlewareApi.Controllers
         }
 
         // POST: api/auth/login
-        //[HttpPost("login")]
-        //public async Task<IActionResult> Login([FromBody] LoginUserDto model)
-        //{
-        //    if (!ModelState.IsValid)
-        //        return BadRequest(ModelState);
-
-        //    // Find the user by email.
-        //    var user = await _userManager.FindByEmailAsync(model.Email);
-        //    if (user == null)
-        //        return Unauthorized("Invalid credentials.");
-
-        //    // Verify the password.
-        //    if (!await _userManager.CheckPasswordAsync(user, model.Password))
-        //        return Unauthorized("Invalid credentials.");
-
-        //    // Load related Branch information (including BranchCode)
-        //    await _dbContext.Entry(user).Reference(u => u.Branch).LoadAsync();
-
-        //    // Retrieve the user's roles.
-        //    var userRoles = await _userManager.GetRolesAsync(user);
-
-        //    // Create claims.
-        //    var authClaims = new List<Claim>
-        //    {
-        //        new Claim(ClaimTypes.Name, user.UserName),
-        //        new Claim("BranchId", user.BranchId.ToString()),
-        //        new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
-        //    };
-
-        //    // Add role claims.
-        //    foreach (var userRole in userRoles)
-        //    {
-        //        authClaims.Add(new Claim(ClaimTypes.Role, userRole));
-        //    }
-
-        //    var jwtSecret = _configuration["JWT:Secret"];
-        //    var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
-
-        //    // Use configuration value for token expiry in minutes
-        //    var expiryMinutes = Convert.ToDouble(_configuration["JWT:TokenExpiryInMinutes"]);
-        //    var token = new JwtSecurityToken(
-        //        issuer: _configuration["JWT:ValidIssuer"],
-        //        audience: _configuration["JWT:ValidAudience"],
-        //        expires: DateTime.Now.AddMinutes(expiryMinutes),
-        //        claims: authClaims,
-        //        signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
-        //    );
-
-        //    // Build a user info object to return including BranchCode.
-        //    var userInfo = new
-        //    {
-        //        user.Id,
-        //        user.UserName,
-        //        user.Email,
-        //        BranchId = user.BranchId,
-        //        BranchName = user.Branch?.BranchName,
-        //        BranchCode = user.Branch?.BranchCode,
-        //        Roles = userRoles.ToList()
-        //    };
-
-        //    return Ok(new
-        //    {
-        //        token = new JwtSecurityTokenHandler().WriteToken(token),
-        //        expiration = token.ValidTo,
-        //        user = userInfo
-        //    });
-        //}
-
-
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginUserDto model)
         {
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
-            // 1) Find the user by email.
             var user = await _userManager.FindByEmailAsync(model.Email);
-            if (user == null)
-                return Unauthorized("Invalid credentials.");
+            if (user == null || !await _userManager.CheckPasswordAsync(user, model.Password))
+                return Unauthorized(new { error = "Invalid credentials." });
 
-            // 2) Verify the password.
-            if (!await _userManager.CheckPasswordAsync(user, model.Password))
-                return Unauthorized("Invalid credentials.");
-
-            // 3) Load related Branch information (including BranchCode)
+            // Load related Branch details
             await _dbContext.Entry(user).Reference(u => u.Branch).LoadAsync();
 
-            // 4) Retrieve the user's roles.
-            var userRoles = await _userManager.GetRolesAsync(user); // role names, e.g. ["Admin", "Manager"]
+            // Get user roles
+            var userRoles = await _userManager.GetRolesAsync(user);
 
-            // 4a) Retrieve all distinct permissions for these roles. 
-            //     We'll do a join between RolePermissions, Permissions, and Roles,
-            //     filtering by role name. Then we select the Permission.Name.
-            var userPermissionNames = await (
+            // Fetch all distinct permissions for user's roles
+            var userPermissions = await (
                 from rp in _dbContext.RolePermissions
                 join p in _dbContext.Permissions on rp.PermissionId equals p.Id
                 join r in _dbContext.Roles on rp.RoleId equals r.Id
                 where userRoles.Contains(r.Name)
                 select p.Name
-            )
-            .Distinct()
-            .ToListAsync();
+            ).Distinct().ToListAsync();
 
-            // 5) Build claims for JWT.
+            // Build claims for JWT
             var authClaims = new List<Claim>
-    {
-        new Claim(ClaimTypes.Name, user.UserName),
-        new Claim("BranchId", user.BranchId.ToString()),
-        new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
-    };
+            {
+                new Claim(ClaimTypes.Name, user.UserName),
+                new Claim("BranchId", user.BranchId.ToString()),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            };
 
             // Add role claims
-            foreach (var userRole in userRoles)
+            foreach (var role in userRoles)
             {
-                authClaims.Add(new Claim(ClaimTypes.Role, userRole));
+                authClaims.Add(new Claim(ClaimTypes.Role, role));
             }
 
-            // 6) Build the token
+            // Add permission claims
+            foreach (var permission in userPermissions)
+            {
+                authClaims.Add(new Claim("Permission", permission));
+            }
+
+            // Generate JWT Token
             var jwtSecret = _configuration["JWT:Secret"];
             var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
             var expiryMinutes = Convert.ToDouble(_configuration["JWT:TokenExpiryInMinutes"]);
@@ -201,7 +126,7 @@ namespace GBEMiddlewareApi.Controllers
                 signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
             );
 
-            // 7) Build a user info object to return, including permissions
+            // Prepare user info response
             var userInfo = new
             {
                 user.Id,
@@ -211,10 +136,9 @@ namespace GBEMiddlewareApi.Controllers
                 BranchName = user.Branch?.BranchName,
                 BranchCode = user.Branch?.BranchCode,
                 Roles = userRoles.ToList(),
-                Permissions = userPermissionNames // <--- Add the list of permission names
+                Permissions = userPermissions
             };
 
-            // 8) Return token + user info
             return Ok(new
             {
                 token = new JwtSecurityTokenHandler().WriteToken(token),
@@ -223,35 +147,23 @@ namespace GBEMiddlewareApi.Controllers
             });
         }
 
-
-
         // POST: api/auth/logout
-        // In token-based authentication, logout is typically handled client-side.
-        // This endpoint is provided as a stub.
         [HttpPost("logout")]
         public IActionResult Logout()
         {
-            // In a real implementation, you might invalidate the token using a token revocation strategy.
-            return Ok("Logout successful (client should discard the token).");
+            return Ok("Logout successful. Client should discard the token.");
         }
 
-        // GET: api/auth/users
-        // Only an Admin can retrieve the list of users.
+        // GET: api/auth/users (Admin only)
         [Authorize(Roles = "Admin")]
         [HttpGet("users")]
         public async Task<IActionResult> GetAllUsers()
         {
-            // Retrieve all users including their Branch data.
-            var users = await _dbContext.Users
-                .Include(u => u.Branch)
-                .ToListAsync();
+            var users = await _dbContext.Users.Include(u => u.Branch).ToListAsync();
 
-            // Prepare a list of user DTOs.
             var userList = new List<UserDto>();
-
             foreach (var user in users)
             {
-                // Retrieve roles for the current user.
                 var roles = await _userManager.GetRolesAsync(user);
 
                 userList.Add(new UserDto
@@ -267,9 +179,77 @@ namespace GBEMiddlewareApi.Controllers
 
             return Ok(userList);
         }
+        
+        // Password Reset Endpoint
+        [Authorize(Roles = "Admin")]
+        [HttpPost("reset-password/{userId}")]
+        public async Task<IActionResult> ResetPassword(string userId)
+        {
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null)
+                return NotFound(new { success = false, message = "User not found." });
+
+            // Generate password reset token
+            var resetToken = await _userManager.GeneratePasswordResetTokenAsync(user);
+            var defaultPassword = "Gbe@1234";
+
+            var result = await _userManager.ResetPasswordAsync(user, resetToken, defaultPassword);
+            if (!result.Succeeded)
+            {
+                return BadRequest(new { success = false, errors = result.Errors.Select(e => e.Description) });
+            }
+
+            return Ok(new { success = true, message = "Password has been reset to default." });
+        }
+
+        //  Lock user account (Admin only)
+        [Authorize(Roles = "Admin")]
+        [HttpPost("lock-user/{userId}")]
+        public async Task<IActionResult> LockUser(string userId)
+        {
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null)
+                return NotFound(new { success = false, message = "User not found." });
+
+            // Lock the account indefinitely
+            var result = await _userManager.SetLockoutEndDateAsync(user, DateTimeOffset.MaxValue);
+            if (!result.Succeeded)
+            {
+                return BadRequest(new { success = false, errors = result.Errors.Select(e => e.Description) });
+            }
+
+            return Ok(new { success = true, message = "User account has been locked." });
+        }
+        // Password Reset By User It Self
+        [Authorize]
+        [HttpPost("change-password")]
+        public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDto model)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(new { success = false, message = "Invalid data." });
+
+            if (model.NewPassword != model.ConfirmNewPassword)
+            {
+                return BadRequest(new { success = false, message = "New password and confirmation do not match." });
+            }
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return Unauthorized(new { success = false, message = "User not found." });
+
+            var result = await _userManager.ChangePasswordAsync(user, model.CurrentPassword, model.NewPassword);
+            if (!result.Succeeded)
+            {
+                return BadRequest(new { success = false, errors = result.Errors.Select(e => e.Description) });
+            }
+
+            return Ok(new { success = true, message = "Password changed successfully." });
+        }
+
     }
 
-    // DTO for registering a user.
+
+    // DTOs for request and response
     public class RegisterUserDto
     {
         public string Email { get; set; }
@@ -278,14 +258,12 @@ namespace GBEMiddlewareApi.Controllers
         public string Role { get; set; }
     }
 
-    // DTO for logging in a user.
     public class LoginUserDto
     {
         public string Email { get; set; }
         public string Password { get; set; }
     }
 
-    // DTO for returning user information in the listing endpoint.
     public class UserDto
     {
         public string Id { get; set; }
@@ -294,5 +272,12 @@ namespace GBEMiddlewareApi.Controllers
         public int BranchId { get; set; }
         public string BranchName { get; set; }
         public List<string> Roles { get; set; }
+    }
+    // DTO for changing password
+    public class ChangePasswordDto
+    {
+        public string CurrentPassword { get; set; }
+        public string NewPassword { get; set; }
+        public string ConfirmNewPassword { get; set; }
     }
 }
