@@ -66,17 +66,18 @@ namespace GBEMiddlewareApi.Data
             {
                 entity.ToTable("api_credentials");
                 entity.HasKey(a => a.ApiCredId);
+
                 entity.HasOne(a => a.Partner)
                       .WithMany()
-                      .HasForeignKey(a => a.PartnerId)
-                      .OnDelete(DeleteBehavior.Restrict)
-                      .HasConstraintName("fk_api_credentials_partner");
+                      .HasForeignKey(a => a.PartnerId);
+
                 entity.HasOne(a => a.Service)
                       .WithMany()
-                      .HasForeignKey(a => a.ServiceId)
-                      .OnDelete(DeleteBehavior.Restrict)
-                      .HasConstraintName("fk_api_credentials_service");
+                      .HasForeignKey(a => a.ServiceId);
+
+                // ...
             });
+
 
             builder.Entity<RequestLog>(entity =>
             {

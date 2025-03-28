@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -7,6 +8,7 @@ using GBEMiddlewareApi.Models;
 using Microsoft.AspNetCore.Identity;
 using GBEMiddlewareApi.Security;
 using Microsoft.AspNetCore.Authorization;
+using GBEMiddlewareApi.Security; // for PermissionAuthorizationHandler, BasicAuthHandler
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,7 +16,6 @@ var builder = WebApplication.CreateBuilder(args);
 //  Register Authorization Services & Policies
 // ----------------------------------------------------------------
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
-
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("Can_create_vat", policy =>
@@ -35,8 +36,9 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("CanViewLogs", policy =>
         policy.Requirements.Add(new PermissionRequirement("CanViewLogs")));
 
-    options.AddPolicy("CanManageSystemSettings", policy =>
-        policy.Requirements.Add(new PermissionRequirement("CanManageSystemSettings")));
+    // repeated?
+    // options.AddPolicy("CanManageSystemSettings", policy =>
+    //    policy.Requirements.Add(new PermissionRequirement("CanManageSystemSettings")));
 
     options.AddPolicy("CanCreateTransactions", policy =>
         policy.Requirements.Add(new PermissionRequirement("CanCreateTransactions")));
@@ -46,9 +48,6 @@ builder.Services.AddAuthorization(options =>
 
     options.AddPolicy("CanRejectTransactions", policy =>
         policy.Requirements.Add(new PermissionRequirement("CanRejectTransactions")));
-
-    //options.AddPolicy("CanRejectTransactions", policy =>
-    //   policy.Requirements.Add(new PermissionRequirement("CanRejectTransactions")));
 });
 
 // ----------------------------------------------------------------
@@ -71,8 +70,8 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
-// Register MiddlewareDbContext (this fixes your PartnerController issue)
 
+// Register MiddlewareDbContext (for PartnerController, etc.)
 builder.Services.AddDbContext<MiddlewareDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
@@ -91,12 +90,16 @@ var jwtSettings = builder.Configuration.GetSection("JWT");
 var jwtSecret = jwtSettings["Secret"];
 var key = Encoding.UTF8.GetBytes(jwtSecret);
 
+// We use the "AddAuthentication()" call once, then chain .AddJwtBearer() and .AddScheme()
 builder.Services.AddAuthentication(options =>
 {
+    // Keep existing default for portal (JWT Bearer)
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+
+    // If you'd rather have a "multi-scheme" approach, you could define a policy scheme.
 })
-.AddJwtBearer(options =>
+.AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
 {
     options.RequireHttpsMetadata = true;
     options.SaveToken = true;
@@ -110,7 +113,12 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(key),
         ValidateLifetime = true
     };
-});
+})
+// Add BasicAuth scheme
+.AddScheme<AuthenticationSchemeOptions, BasicAuthHandler>(
+    "BasicAuth",
+    options => { /* you could configure scheme here if needed */ }
+);
 
 // ----------------------------------------------------------------
 //  Register Controllers & Swagger
@@ -119,6 +127,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Register an HttpClient for any SOAP calls
 builder.Services.AddHttpClient();
 
 // ----------------------------------------------------------------
@@ -136,7 +145,9 @@ app.UseSwaggerUI(c =>
 });
 
 app.UseHttpsRedirection();
-app.UseAuthentication();
+
+app.UseAuthentication();  // <--- must come before UseAuthorization
 app.UseAuthorization();
+
 app.MapControllers();
 app.Run();

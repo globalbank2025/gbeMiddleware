@@ -33,23 +33,12 @@ namespace GBEMiddlewareApi.Attributes
             }
 
             // Validate API key from DB
-            var dbContext = (ApplicationDbContext)context.HttpContext
-                .RequestServices.GetService(typeof(ApplicationDbContext));
 
-            var creds = dbContext.ApiCredentials
-                .AsNoTracking()
-                .FirstOrDefault(c => c.ApiKey == apiKey && c.Status == "ACTIVE");
+            
 
-            if (creds == null)
-            {
-                // Invalid API key
-                context.Result = new UnauthorizedResult();
-                return;
-            }
+            
 
-            // Optionally, set HttpContext.Items to hold client info
-            context.HttpContext.Items["ApiClientName"] = $"Client-{creds.PartnerId}";
-            // Let request pass
+            
         }
     }
 }

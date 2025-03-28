@@ -20,9 +20,7 @@ namespace GBEMiddlewareApi.Data
         public DbSet<LogEntry> LogEntries { get; set; }
         public DbSet<AuditLog> AuditLogs { get; set; }
 
-        // NEW: DbSet for storing 3rd-party API credentials
-        public DbSet<ApiCredentials> ApiCredentials { get; set; }
-
+        
         // NEW: DbSet for our TransactionLog
         public DbSet<TransactionLog> TransactionLogs { get; set; }
         public DbSet<Permission> Permissions { get; set; }
@@ -91,24 +89,7 @@ namespace GBEMiddlewareApi.Data
                       .HasDefaultValueSql("now()");
             });
 
-            // -------------------------
-            // ApiCredentials
-            // -------------------------
-            builder.Entity<ApiCredentials>(entity =>
-            {
-                entity.ToTable("ApiCredentials");
-                entity.HasKey(e => e.ApiCredId);
-
-                entity.Property(e => e.ApiKey)
-                      .HasMaxLength(200);
-
-                entity.Property(e => e.ApiSecret)
-                      .HasMaxLength(200);
-
-                entity.Property(e => e.Status)
-                      .HasMaxLength(50)
-                      .HasDefaultValue("ACTIVE");
-            });
+            
 
             // -------------------------
             // TransactionLog (NEW)

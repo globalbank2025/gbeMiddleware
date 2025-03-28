@@ -3,6 +3,7 @@ using System;
 using GBEMiddlewareApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace GBEMiddlewareApi.Migrations
 {
     [DbContext(typeof(MiddlewareDbContext))]
-    partial class MiddlewareDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250327112932_ApiCredentialUpdated")]
+    partial class ApiCredentialUpdated
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -592,14 +595,16 @@ namespace GBEMiddlewareApi.Migrations
                     b.HasOne("GBEMiddlewareApi.Models.Partner", "Partner")
                         .WithMany()
                         .HasForeignKey("PartnerId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_api_credentials_partner");
 
                     b.HasOne("GBEMiddlewareApi.Models.Service", "Service")
                         .WithMany()
                         .HasForeignKey("ServiceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_api_credentials_service");
 
                     b.Navigation("Partner");
 
