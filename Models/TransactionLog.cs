@@ -7,12 +7,12 @@ namespace GBEMiddlewareApi.Models
         public int Id { get; set; }                          // Primary Key
 
         // Link this log entry to the VatCollectionTransaction
-        public int VatCollectionTransactionId { get; set; }   // Foreign Key to VatCollectionTransaction
+        public int? VatCollectionTransactionId { get; set; }   // Foreign Key to VatCollectionTransaction
 
         // Basic transaction info to store
         public string CustomerAccount { get; set; }           // pending.AccountNumber
         public decimal TransactionAmount { get; set; }        // Could store service charge or total – choose what's best
-        public string CustomerName { get; set; }              // pending.CustomerName
+        public string? CustomerName { get; set; }              // pending.CustomerName
 
         public string RequestPayload { get; set; }            // The SOAP request JSON or a concise snippet
         public string ResponsePayload { get; set; }           // The SOAP response or error message
