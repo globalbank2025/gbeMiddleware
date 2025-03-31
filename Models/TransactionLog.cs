@@ -18,6 +18,7 @@ namespace GBEMiddlewareApi.Models
         public string ResponsePayload { get; set; }           // The SOAP response or error message
 
         public string? TransactionReference { get; set; } // <-- Make it nullable // The reference from SOAP => ref1
+        public string? ExternalTransactionReference { get; set; } // <-- Make it nullable // The reference from SOAP => ref1
 
         //  public string TransactionReference { get; set; }      // The reference from SOAP => ref1
         public string ApprovedBy { get; set; }                // The user who approved (pending.ApprovedBy)

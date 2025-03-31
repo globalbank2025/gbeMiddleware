@@ -8,7 +8,8 @@ using System.Threading.Tasks;
 using System.Xml.Linq;
 using Microsoft.EntityFrameworkCore;
 using GBEMiddlewareApi.Data;   // <--- for MiddlewareDbContext
-using GBEMiddlewareApi.Models; // <--- for Service, ApiCredentials
+using GBEMiddlewareApi.Models;
+using System.Text.Json; // <--- for Service, ApiCredentials
 
 namespace GBEMiddlewareApi.Controllers
 {
@@ -35,6 +36,7 @@ namespace GBEMiddlewareApi.Controllers
             _httpClientFactory = httpClientFactory;
             _logger = logger;
             _middlewareContext = middlewareContext;
+            _applicationDbContext = applicationDbContext;
         }
 
         /// <summary>
@@ -234,20 +236,23 @@ namespace GBEMiddlewareApi.Controllers
         }
 
 
+
         [HttpPost("PostTransaction")]
         public async Task<IActionResult> PostTransaction([FromBody] PostTransactionRequest req)
         {
+            // Serialize the raw user request JSON exactly as received (for debugging, if needed)
+            var rawUserRequest = JsonSerializer.Serialize(req);
+
+            // This will hold the SOAP envelope sent to CBS
+            string soapRequest = null;
+
             try
             {
-                // -----------------------------------------------
                 // 1) Authenticate ServiceCode
-                // -----------------------------------------------
                 var serviceRecord = await _middlewareContext.Services
                     .FirstOrDefaultAsync(s => s.ServiceCode == req.ServiceCode);
-
                 if (serviceRecord == null)
                 {
-                    // Return the "Invalid Credentials" JSON if service code is invalid
                     return BadRequest(new
                     {
                         StatusCode = 100,
@@ -257,17 +262,15 @@ namespace GBEMiddlewareApi.Controllers
                     });
                 }
 
-                // -----------------------------------------------
-                // 2) Retrieve matching ApiCredentials (username/password)
-                // -----------------------------------------------
+                // 2) Retrieve matching ApiCredentials
                 var apiCred = await _middlewareContext.ApiCredentials
-                    .FirstOrDefaultAsync(ac => ac.ServiceId == serviceRecord.ServiceId
-                                            && ac.Username == req.UserId
-                                            && ac.Password == req.Password
-                                            && ac.Status == "ACTIVE");
+                    .FirstOrDefaultAsync(ac =>
+                        ac.ServiceId == serviceRecord.ServiceId &&
+                        ac.Username == req.UserId &&
+                        ac.Password == req.Password &&
+                        ac.Status == "ACTIVE");
                 if (apiCred == null)
                 {
-                    // Return the "Invalid Credentials" JSON if no matching credentials
                     return BadRequest(new
                     {
                         StatusCode = 100,
@@ -277,9 +280,7 @@ namespace GBEMiddlewareApi.Controllers
                     });
                 }
 
-                // -----------------------------------------------
                 // 3) Basic request validation
-                // -----------------------------------------------
                 if (string.IsNullOrEmpty(req.AccountNo))
                 {
                     return BadRequest(new
@@ -290,7 +291,6 @@ namespace GBEMiddlewareApi.Controllers
                         ErrorMsg = "Missing AccountNo"
                     });
                 }
-                // Must be at least 3 digits to extract the branch portion
                 if (req.AccountNo.Length < 3)
                 {
                     return BadRequest(new
@@ -301,7 +301,6 @@ namespace GBEMiddlewareApi.Controllers
                         ErrorMsg = "Invalid AccountNo"
                     });
                 }
-
                 if (string.IsNullOrEmpty(req.Amount))
                 {
                     return BadRequest(new
@@ -313,25 +312,40 @@ namespace GBEMiddlewareApi.Controllers
                     });
                 }
 
-                // -----------------------------------------------
-                // 4) Build the SOAP Envelope
-                // -----------------------------------------------
-                // Extract first 3 digits from AccountNo => BRN, TXNBRN
-                string first3 = req.AccountNo.Substring(0, 3);
-                string offsetBranch = req.ExtEntity.Substring(0, 3);
+                // Ensure the user provides an ExtRefNo
+                if (string.IsNullOrEmpty(req.ExtRefNo))
+                {
+                    return BadRequest(new
+                    {
+                        StatusCode = 300,
+                        Status = "FAILURE",
+                        Message = "ExtRefNo is required",
+                        ErrorMsg = "Missing ExtRefNo"
+                    });
+                }
 
-                // Possibly generate a random message ID
+                // Check for duplicate ExtRefNo in the transaction log
+                bool isDuplicate = await _applicationDbContext.TransactionLogs
+                    .AnyAsync(t => t.ExternalTransactionReference == req.ExtRefNo);
+                if (isDuplicate)
+                {
+                    return BadRequest(new
+                    {
+                        StatusCode = 100,
+                        Status = "FAILURE",
+                        Message = "Duplicate Reference",
+                        ErrorMsg = "FAILURE"
+                    });
+                }
+
+                // 4) Build the SOAP envelope
                 string msgId = GenerateRandomMsgId();
-
-                string soapRequest = BuildTransactionSoapEnvelope(req, first3, msgId);
+                soapRequest = BuildTransactionSoapEnvelope(req, serviceRecord, msgId);
                 _logger.LogInformation("PostTransaction SOAP Request => {SoapEnvelope}", soapRequest);
 
-                // -----------------------------------------------
                 // 5) Post to the SOAP endpoint
-                // -----------------------------------------------
                 var client = _httpClientFactory.CreateClient();
                 var httpContent = new StringContent(soapRequest, Encoding.UTF8, "text/xml");
-                // Overwrite the content-type header to ensure correct format
                 httpContent.Headers.Clear();
                 httpContent.Headers.Add("Content-Type", "text/xml;charset=UTF-8");
 
@@ -343,33 +357,58 @@ namespace GBEMiddlewareApi.Controllers
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error calling PostTransaction SOAP service");
-                    return StatusCode(500, new
+
+                    var finalResponse = new
                     {
                         StatusCode = 500,
                         Status = "FAILURE",
                         Message = "Error calling SOAP service",
                         ErrorMsg = ex.Message
-                    });
+                    };
+                    var finalResponseJson = JsonSerializer.Serialize(finalResponse);
+
+                    // Log using the SOAP envelope as the request payload
+                    await SaveTransactionLogAsync(
+                        accountNo: req.AccountNo,
+                        amount: 0,
+                        requestPayload: soapRequest,
+                        responsePayload: finalResponseJson,
+                        userId: req.UserId ?? "Unknown",
+                        transactionRef: null, // No CBS reference
+                        externalTransactionReference: req.ExtRefNo
+                    );
+
+                    return StatusCode(500, finalResponse);
                 }
 
                 string responseContent = await soapResponse.Content.ReadAsStringAsync();
                 _logger.LogInformation("PostTransaction SOAP Response => {Resp}", responseContent);
 
-                // If HTTP code isn't 2xx success, treat it as an error
                 if (!soapResponse.IsSuccessStatusCode)
                 {
-                    return StatusCode((int)soapResponse.StatusCode, new
+                    var finalResponse = new
                     {
                         StatusCode = (int)soapResponse.StatusCode,
                         Status = "FAILURE",
                         Message = "SOAP service returned an error",
                         ErrorMsg = "HTTP code " + soapResponse.StatusCode
-                    });
+                    };
+                    var finalResponseJson = JsonSerializer.Serialize(finalResponse);
+
+                    await SaveTransactionLogAsync(
+                        accountNo: req.AccountNo,
+                        amount: 0,
+                        requestPayload: soapRequest,
+                        responsePayload: finalResponseJson,
+                        userId: req.UserId ?? "Unknown",
+                        transactionRef: null,
+                        externalTransactionReference: req.ExtRefNo
+                    );
+
+                    return StatusCode((int)soapResponse.StatusCode, finalResponse);
                 }
 
-                // -----------------------------------------------
                 // 6) Parse the SOAP response
-                // -----------------------------------------------
                 XDocument xDoc;
                 try
                 {
@@ -377,42 +416,62 @@ namespace GBEMiddlewareApi.Controllers
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error parsing PostTransaction SOAP response");
-                    return StatusCode(500, new
+                    var finalResponse = new
                     {
                         StatusCode = 500,
                         Status = "FAILURE",
                         Message = "Error parsing SOAP response",
                         ErrorMsg = ex.Message
-                    });
+                    };
+                    var finalResponseJson = JsonSerializer.Serialize(finalResponse);
+
+                    await SaveTransactionLogAsync(
+                        accountNo: req.AccountNo,
+                        amount: 0,
+                        requestPayload: soapRequest,
+                        responsePayload: finalResponseJson,
+                        userId: req.UserId ?? "Unknown",
+                        transactionRef: null,
+                        externalTransactionReference: req.ExtRefNo
+                    );
+
+                    return StatusCode(500, finalResponse);
                 }
 
                 XNamespace ns = "http://fcubs.ofss.com/service/FCUBSRTService";
                 var msgStat = xDoc.Descendants(ns + "MSGSTAT").FirstOrDefault()?.Value;
 
-                // ------------------------------------------------
-                // 7) Check MSGSTAT for SUCCESS or FAILURE
-                // ------------------------------------------------
+                decimal parsedAmount = 0;
+                decimal.TryParse(req.Amount, out parsedAmount);
+
+                // 7) Evaluate the SOAP response
                 if (string.Equals(msgStat, "SUCCESS", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Extract <XREF> => BankRefNo
                     var xref = xDoc.Descendants(ns + "XREF").FirstOrDefault()?.Value;
-                    if (string.IsNullOrEmpty(xref))
-                    {
-                        // If no XREF, treat it as partial success
-                        xref = "NoXREFFound";
-                    }
+                    if (string.IsNullOrEmpty(xref)) xref = "NoXREFFound";
 
-                    return Ok(new
+                    var finalResponse = new
                     {
                         statusCode = 200,
                         message = "Success",
                         BankRefNo = xref
-                    });
+                    };
+                    var finalResponseJson = JsonSerializer.Serialize(finalResponse);
+
+                    await SaveTransactionLogAsync(
+                        accountNo: req.AccountNo,
+                        amount: parsedAmount,
+                        requestPayload: soapRequest,
+                        responsePayload: finalResponseJson,
+                        userId: req.UserId ?? "Unknown",
+                        transactionRef: xref,
+                        externalTransactionReference: req.ExtRefNo
+                    );
+
+                    return Ok(finalResponse);
                 }
                 else if (string.Equals(msgStat, "FAILURE", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Gather error descriptions from <FCUBS_ERROR_RESP><ERROR><EDESC>
                     var errorDescriptions = xDoc.Descendants(ns + "FCUBS_ERROR_RESP")
                         .Descendants(ns + "ERROR")
                         .Select(e => e.Element(ns + "EDESC")?.Value)
@@ -420,36 +479,74 @@ namespace GBEMiddlewareApi.Controllers
                         .ToList();
 
                     string errorMsg = string.Join(" | ", errorDescriptions);
-                    return BadRequest(new
+                    var finalResponse = new
                     {
-                        StatusCode = 300,       // or any code you wish
+                        StatusCode = 300,
                         Status = "FAILURE",
                         Message = "Transaction failed in CBS",
                         ErrorMsg = errorMsg
-                    });
+                    };
+                    var finalResponseJson = JsonSerializer.Serialize(finalResponse);
+
+                    await SaveTransactionLogAsync(
+                        accountNo: req.AccountNo,
+                        amount: parsedAmount,
+                        requestPayload: soapRequest,
+                        responsePayload: finalResponseJson,
+                        userId: req.UserId ?? "Unknown",
+                        transactionRef: null,
+                        externalTransactionReference: req.ExtRefNo
+                    );
+
+                    return BadRequest(finalResponse);
                 }
                 else
                 {
-                    // Unknown status
-                    return StatusCode(500, new
+                    var finalResponse = new
                     {
                         StatusCode = 500,
                         Status = "FAILURE",
                         Message = "Unknown SOAP message status",
                         ErrorMsg = msgStat
-                    });
+                    };
+                    var finalResponseJson = JsonSerializer.Serialize(finalResponse);
+
+                    await SaveTransactionLogAsync(
+                        accountNo: req.AccountNo,
+                        amount: parsedAmount,
+                        requestPayload: soapRequest,
+                        responsePayload: finalResponseJson,
+                        userId: req.UserId ?? "Unknown",
+                        transactionRef: null,
+                        externalTransactionReference: req.ExtRefNo
+                    );
+
+                    return StatusCode(500, finalResponse);
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled exception in PostTransaction");
-                return StatusCode(500, new
+                var finalResponse = new
                 {
                     StatusCode = 500,
                     Status = "FAILURE",
                     Message = "Unhandled exception",
                     ErrorMsg = ex.Message
-                });
+                };
+                var finalResponseJson = JsonSerializer.Serialize(finalResponse);
+
+                await SaveTransactionLogAsync(
+                    accountNo: string.IsNullOrEmpty(req.AccountNo) ? "N/A" : req.AccountNo,
+                    amount: 0,
+                    requestPayload: soapRequest,
+                    responsePayload: finalResponseJson,
+                    userId: req.UserId ?? "Unknown",
+                    transactionRef: null,
+                    externalTransactionReference: req.ExtRefNo
+                );
+
+                return StatusCode(500, finalResponse);
             }
         }
 
@@ -460,61 +557,107 @@ namespace GBEMiddlewareApi.Controllers
             return randomNumber;  // e.g. "6125088095"
         }
 
-        private string BuildTransactionSoapEnvelope(PostTransactionRequest req, string first3, string msgId)
+        private string BuildTransactionSoapEnvelope(PostTransactionRequest req, Service serviceRecord, string msgId)
         {
-            // Hard-code PRD to "FTRQ" (like your sample). 
-            // Hard-code <fcub:USERID> to "FCATOP" or "ESBUSER" (your choice).
-            // If BranchCode is 000, you can place that in <fcub:BRANCH>, else adapt as needed.
-            string offsetBranch = req.ExtEntity.Substring(0, 3);
+            // Determine TXNACC and OFFSETACC based on OffSetAccNo and ServiceType:
+            // 1. If serviceRecord.OffsetAccNo equals "OnQuery" (ignoring case), then:
+            //    TXNACC = req.AccountNo and OFFSETACC = req.ExtEntity.
+            // 2. Otherwise:
+            //    - For ServiceType "Credit": TXNACC = req.AccountNo, OFFSETACC = serviceRecord.OffsetAccNo.
+            //    - For ServiceType "Debit":  TXNACC = serviceRecord.OffsetAccNo, OFFSETACC = req.AccountNo.
+            string txnAcc;
+            string offsetAcc;
 
+            if (serviceRecord.OffsetAccNo.Equals("OnQuery", StringComparison.OrdinalIgnoreCase))
+            {
+                txnAcc = req.AccountNo;
+                offsetAcc = req.ExtEntity;
+            }
+            else
+            {
+                if (serviceRecord.ServiceType.Equals("Credit", StringComparison.OrdinalIgnoreCase))
+                {
+                    txnAcc = req.AccountNo;
+                    offsetAcc = serviceRecord.OffsetAccNo;
+                }
+                else if (serviceRecord.ServiceType.Equals("Debit", StringComparison.OrdinalIgnoreCase))
+                {
+                    txnAcc = serviceRecord.OffsetAccNo;
+                    offsetAcc = req.AccountNo;
+                }
+                else
+                {
+                    // Fallback logic
+                    txnAcc = req.AccountNo;
+                    offsetAcc = serviceRecord.OffsetAccNo;
+                }
+            }
+
+            // Use the serviceRecord.ProductCode or default to "FTRQ"
+            string productCode = !string.IsNullOrEmpty(serviceRecord.ProductCode) ? serviceRecord.ProductCode : "FTRQ";
+
+            // Adjust TXNBRN: Extract the first 3 digits from the determined TXNACC value.
+            string txnbrn = "000";
+            if (!string.IsNullOrEmpty(txnAcc) && txnAcc.Length >= 3)
+            {
+                txnbrn = txnAcc.Substring(0, 3);
+            }
+
+            // Adjust OFFSETBRN: Extract the first 3 digits from the determined OFFSETACC value.
+            string offsetBranch = "000";
+            if (!string.IsNullOrEmpty(offsetAcc) && offsetAcc.Length >= 3)
+            {
+                offsetBranch = offsetAcc.Substring(0, 3);
+            }
+
+            // Build and return the SOAP envelope
             return $@"<?xml version=""1.0"" encoding=""UTF-8""?>
-            <soapenv:Envelope xmlns:soapenv=""http://schemas.xmlsoap.org/soap/envelope/"" xmlns:fcub=""http://fcubs.ofss.com/service/FCUBSRTService"">
-            <soapenv:Header/>
-            <soapenv:Body>
-                <fcub:CREATETRANSACTION_FSFS_REQ>
-                    <fcub:FCUBS_HEADER>
-                    <fcub:SOURCE>CHQPNT</fcub:SOURCE>
-                    <fcub:UBSCOMP>FCUBS</fcub:UBSCOMP>
-                    <fcub:USERID>FCATOP</fcub:USERID>
-                    <fcub:BRANCH>{req.BranchCode}</fcub:BRANCH>
-                    <fcub:SERVICE>FCUBSRTService</fcub:SERVICE>
-                    <fcub:OPERATION>CreateTransaction</fcub:OPERATION>
-                    <fcub:MSGID>{msgId}</fcub:MSGID>
-                    </fcub:FCUBS_HEADER>
-                    <fcub:FCUBS_BODY>
-                    <fcub:Transaction-Details>
-                        <fcub:PRD>FTRQ</fcub:PRD>
-                        <fcub:BRN>{first3}</fcub:BRN>
-                        <fcub:TXNBRN>{first3}</fcub:TXNBRN>
-                        <fcub:TXNACC>{req.AccountNo}</fcub:TXNACC>
-                        <fcub:TXNCCY>ETB</fcub:TXNCCY>
-                        <fcub:TXNAMT>{req.Amount}</fcub:TXNAMT>
-                        <!-- For this example, we assume OFFSETBRN is the same as BRANCHCODE or set default. -->
-                        <fcub:OFFSETBRN>{offsetBranch}</fcub:OFFSETBRN>
-                        <!-- ExtEntity => OFFSETACC -->
-                        <fcub:OFFSETACC>{req.ExtEntity}</fcub:OFFSETACC>
-                        <fcub:OFFSETCCY>ETB</fcub:OFFSETCCY>
-                        <fcub:TXNDATE>{req.TxnDate}</fcub:TXNDATE>
-                        <fcub:VALDATE>{req.TxnDate}</fcub:VALDATE>
-                        <fcub:NARRATIVE>{req.TxnDesc}</fcub:NARRATIVE>
-                    </fcub:Transaction-Details>
-                    </fcub:FCUBS_BODY>
-                </fcub:CREATETRANSACTION_FSFS_REQ>
-            </soapenv:Body>
-            </soapenv:Envelope>";
+<soapenv:Envelope xmlns:soapenv=""http://schemas.xmlsoap.org/soap/envelope/"" xmlns:fcub=""http://fcubs.ofss.com/service/FCUBSRTService"">
+    <soapenv:Header/>
+    <soapenv:Body>
+        <fcub:CREATETRANSACTION_FSFS_REQ>
+            <fcub:FCUBS_HEADER>
+                <fcub:SOURCE>CHQPNT</fcub:SOURCE>
+                <fcub:UBSCOMP>FCUBS</fcub:UBSCOMP>
+                <fcub:USERID>ESBUSER</fcub:USERID>
+                <fcub:BRANCH>{req.BranchCode}</fcub:BRANCH>
+                <fcub:SERVICE>FCUBSRTService</fcub:SERVICE>
+                <fcub:OPERATION>CreateTransaction</fcub:OPERATION>
+                <fcub:MSGID>{msgId}</fcub:MSGID>
+            </fcub:FCUBS_HEADER>
+            <fcub:FCUBS_BODY>
+                <fcub:Transaction-Details>
+                    <fcub:PRD>{productCode}</fcub:PRD>
+                    <fcub:BRN>{txnbrn}</fcub:BRN>
+                    <fcub:TXNBRN>{txnbrn}</fcub:TXNBRN>
+                    <fcub:TXNACC>{txnAcc}</fcub:TXNACC>
+                    <fcub:TXNCCY>ETB</fcub:TXNCCY>
+                    <fcub:TXNAMT>{req.Amount}</fcub:TXNAMT>
+                    <fcub:OFFSETBRN>{offsetBranch}</fcub:OFFSETBRN>
+                    <fcub:OFFSETACC>{offsetAcc}</fcub:OFFSETACC>
+                    <fcub:OFFSETCCY>ETB</fcub:OFFSETCCY>
+                    <fcub:TXNDATE>{req.TxnDate}</fcub:TXNDATE>
+                    <fcub:VALDATE>{req.TxnDate}</fcub:VALDATE>
+                    <fcub:NARRATIVE>{req.TxnDesc}</fcub:NARRATIVE>
+                </fcub:Transaction-Details>
+            </fcub:FCUBS_BODY>
+        </fcub:CREATETRANSACTION_FSFS_REQ>
+    </soapenv:Body>
+</soapenv:Envelope>";
         }
 
-
+        // Saving Transaction Log
         private async Task SaveTransactionLogAsync(
-            string accountNo,
-            decimal amount,
-            string requestPayload,
-            string responsePayload,
-            string userId,  // or "approvedBy"
-            string? transactionRef = null,
-            int? vatCollectionTxId = null,
-            string? customerName = null)
-                {
+           string accountNo,
+           decimal amount,
+           string requestPayload,
+           string responsePayload,
+           string userId,  // or "approvedBy"
+           string? transactionRef = null,
+           string? externalTransactionReference = null,
+           int? vatCollectionTxId = null,
+           string? customerName = null)
+        {
             var logEntry = new TransactionLog
             {
                 VatCollectionTransactionId = vatCollectionTxId,
@@ -526,6 +669,7 @@ namespace GBEMiddlewareApi.Controllers
                 ResponsePayload = responsePayload,
 
                 TransactionReference = transactionRef,
+                ExternalTransactionReference = externalTransactionReference,
 
                 ApprovedBy = userId,
                 ApprovedAt = DateTimeOffset.UtcNow,
@@ -536,6 +680,7 @@ namespace GBEMiddlewareApi.Controllers
             _applicationDbContext.TransactionLogs.Add(logEntry);
             await _applicationDbContext.SaveChangesAsync();
         }
+
 
     }
 
