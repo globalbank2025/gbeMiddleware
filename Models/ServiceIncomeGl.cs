@@ -27,7 +27,7 @@ namespace GBEMiddlewareApi.Models
         public string GlCode { get; set; }
 
         [Required]
-        [MaxLength(100)]
+        [MaxLength(255)]
         public string Name { get; set; }
 
         [MaxLength(250)]
