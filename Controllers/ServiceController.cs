@@ -17,6 +17,9 @@ namespace GBEMiddlewareApi.Controllers
         public string ServiceType { get; set; }
         public string OffsetAccNo { get; set; }
         public string Status { get; set; } = "ACTIVE";
+        public string Left { get; set; }  // Added Left attribute
+        public string ProductCode { get; set; } = "FTRQ"; // Added ProductCode
+        public string SourceCode { get; set; } = "TLB"; // Added SourceCode
     }
 
     [ApiController]
@@ -60,7 +63,7 @@ namespace GBEMiddlewareApi.Controllers
                 return BadRequest(new { message = "A service with the same service code or service name already exists." });
             }
 
-            // Map DTO to Service entity
+            // Map DTO to Service entity, including Left, ProductCode, and SourceCode
             var service = new Service
             {
                 ServiceCode = dto.ServiceCode,
@@ -70,7 +73,9 @@ namespace GBEMiddlewareApi.Controllers
                 OffsetAccNo = dto.OffsetAccNo,
                 Status = dto.Status,
                 CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
+                UpdatedAt = DateTimeOffset.UtcNow,
+                ProductCode = dto.ProductCode,
+                SourceCode = dto.SourceCode
             };
 
             _context.Services.Add(service);
@@ -99,7 +104,7 @@ namespace GBEMiddlewareApi.Controllers
                 return BadRequest(new { message = "A service with the same service code or service name already exists." });
             }
 
-            // Update properties
+            // Update properties, including Left, ProductCode, and SourceCode
             existingService.ServiceCode = serviceData.ServiceCode;
             existingService.ServiceName = serviceData.ServiceName;
             existingService.Description = serviceData.Description;
@@ -107,6 +112,8 @@ namespace GBEMiddlewareApi.Controllers
             existingService.OffsetAccNo = serviceData.OffsetAccNo;
             existingService.Status = serviceData.Status;
             existingService.UpdatedAt = DateTimeOffset.UtcNow;
+            existingService.ProductCode = serviceData.ProductCode;
+            existingService.SourceCode = serviceData.SourceCode;
 
             await _context.SaveChangesAsync();
             return Ok(new { message = "Service updated successfully." });

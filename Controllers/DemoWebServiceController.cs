@@ -338,7 +338,7 @@ namespace GBEMiddlewareApi.Controllers
                     });
                 }
 
-                // 4) Build the SOAP envelope
+                // 4) Build the SOAP envelope with the revised logic
                 string msgId = GenerateRandomMsgId();
                 soapRequest = BuildTransactionSoapEnvelope(req, serviceRecord, msgId);
                 _logger.LogInformation("PostTransaction SOAP Request => {SoapEnvelope}", soapRequest);
@@ -352,6 +352,7 @@ namespace GBEMiddlewareApi.Controllers
                 HttpResponseMessage soapResponse;
                 try
                 {
+                    // Provide your actual SOAP endpoint URL below
                     soapResponse = await client.PostAsync("http://10.1.200.153:7003/FCUBSRTService/FCUBSRTService", httpContent);
                 }
                 catch (Exception ex)
@@ -367,14 +368,14 @@ namespace GBEMiddlewareApi.Controllers
                     };
                     var finalResponseJson = JsonSerializer.Serialize(finalResponse);
 
-                    // Log using the SOAP envelope as the request payload
+                    // Save to TransactionLogs
                     await SaveTransactionLogAsync(
                         accountNo: req.AccountNo,
                         amount: 0,
                         requestPayload: soapRequest,
                         responsePayload: finalResponseJson,
                         userId: req.UserId ?? "Unknown",
-                        transactionRef: null, // No CBS reference
+                        transactionRef: null,
                         externalTransactionReference: req.ExtRefNo
                     );
 
@@ -559,65 +560,87 @@ namespace GBEMiddlewareApi.Controllers
 
         private string BuildTransactionSoapEnvelope(PostTransactionRequest req, Service serviceRecord, string msgId)
         {
-            // Determine TXNACC and OFFSETACC based on OffSetAccNo and ServiceType:
-            // 1. If serviceRecord.OffsetAccNo equals "OnQuery" (ignoring case), then:
-            //    TXNACC = req.AccountNo and OFFSETACC = req.ExtEntity.
-            // 2. Otherwise:
-            //    - For ServiceType "Credit": TXNACC = req.AccountNo, OFFSETACC = serviceRecord.OffsetAccNo.
-            //    - For ServiceType "Debit":  TXNACC = serviceRecord.OffsetAccNo, OFFSETACC = req.AccountNo.
+            // 1) Trim the ServiceType to remove any leading/trailing spaces or newline chars.
+            string serviceTypeTrimmed = (serviceRecord.ServiceType ?? "")
+                                        .Trim()
+                                        .Replace("\n", "")
+                                        .Replace("\r", "");
+
+            // Optional debug log
+            Console.WriteLine($"[DEBUG] ServiceType after trimming: '{serviceTypeTrimmed}'");
+
+            // 2) Decide TXNACC and OFFSETACC based on ServiceType + OffsetAccNo
             string txnAcc;
             string offsetAcc;
 
             if (serviceRecord.OffsetAccNo.Equals("OnQuery", StringComparison.OrdinalIgnoreCase))
             {
-                txnAcc = req.AccountNo;
-                offsetAcc = req.ExtEntity;
+                // Fallback if OffsetAccNo is literally "OnQuery"
+                // Previously: txnAcc = req.AccountNo; offsetAcc = req.ExtEntity;
+                // Now swapped:
+                txnAcc = req.ExtEntity;
+                offsetAcc = req.AccountNo;
             }
             else
             {
-                if (serviceRecord.ServiceType.Equals("Credit", StringComparison.OrdinalIgnoreCase))
+                if (serviceTypeTrimmed.Equals("Debit", StringComparison.OrdinalIgnoreCase))
                 {
+                    // For DEBIT:
+                    // Previously: txnAcc = serviceRecord.OffsetAccNo; offsetAcc = req.AccountNo;
+                    // Now swapped:
                     txnAcc = req.AccountNo;
                     offsetAcc = serviceRecord.OffsetAccNo;
                 }
-                else if (serviceRecord.ServiceType.Equals("Debit", StringComparison.OrdinalIgnoreCase))
+                else if (serviceTypeTrimmed.Equals("Credit", StringComparison.OrdinalIgnoreCase))
                 {
+                    // For CREDIT:
+                    // Previously: txnAcc = req.AccountNo; offsetAcc = serviceRecord.OffsetAccNo;
+                    // Now swapped:
                     txnAcc = serviceRecord.OffsetAccNo;
                     offsetAcc = req.AccountNo;
                 }
                 else
                 {
-                    // Fallback logic
-                    txnAcc = req.AccountNo;
-                    offsetAcc = serviceRecord.OffsetAccNo;
+                    // Fallback if ServiceType is neither "Credit" nor "Debit"
+                    // Previously: txnAcc = req.AccountNo; offsetAcc = serviceRecord.OffsetAccNo;
+                    // Now swapped:
+                    txnAcc = serviceRecord.OffsetAccNo;
+                    offsetAcc = req.AccountNo;
                 }
             }
 
-            // Use the serviceRecord.ProductCode or default to "FTRQ"
-            string productCode = !string.IsNullOrEmpty(serviceRecord.ProductCode) ? serviceRecord.ProductCode : "FTRQ";
+            // 3) Use ProductCode or default to "FTRQ"
+            string productCode = !string.IsNullOrEmpty(serviceRecord.ProductCode)
+                ? serviceRecord.ProductCode
+                : "FTRQ";
 
-            // Adjust TXNBRN: Extract the first 3 digits from the determined TXNACC value.
+            // 4) Use SourceCode or default to "TLB"
+            string sourceCode = !string.IsNullOrEmpty(serviceRecord.SourceCode)
+                ? serviceRecord.SourceCode
+                : "TLB";
+
+            // 5) Extract the first 3 digits for TXNBRN from txnAcc
             string txnbrn = "000";
             if (!string.IsNullOrEmpty(txnAcc) && txnAcc.Length >= 3)
             {
                 txnbrn = txnAcc.Substring(0, 3);
             }
 
-            // Adjust OFFSETBRN: Extract the first 3 digits from the determined OFFSETACC value.
+            // 6) Extract the first 3 digits for OFFSETBRN from offsetAcc
             string offsetBranch = "000";
             if (!string.IsNullOrEmpty(offsetAcc) && offsetAcc.Length >= 3)
             {
                 offsetBranch = offsetAcc.Substring(0, 3);
             }
 
-            // Build and return the SOAP envelope
+            // 7) Build and return the SOAP envelope
             return $@"<?xml version=""1.0"" encoding=""UTF-8""?>
 <soapenv:Envelope xmlns:soapenv=""http://schemas.xmlsoap.org/soap/envelope/"" xmlns:fcub=""http://fcubs.ofss.com/service/FCUBSRTService"">
     <soapenv:Header/>
     <soapenv:Body>
         <fcub:CREATETRANSACTION_FSFS_REQ>
             <fcub:FCUBS_HEADER>
-                <fcub:SOURCE>CHQPNT</fcub:SOURCE>
+                <fcub:SOURCE>{sourceCode}</fcub:SOURCE>
                 <fcub:UBSCOMP>FCUBS</fcub:UBSCOMP>
                 <fcub:USERID>ESBUSER</fcub:USERID>
                 <fcub:BRANCH>{req.BranchCode}</fcub:BRANCH>

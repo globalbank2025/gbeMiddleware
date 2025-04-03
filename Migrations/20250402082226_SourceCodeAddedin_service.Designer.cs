@@ -3,6 +3,7 @@ using System;
 using GBEMiddlewareApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace GBEMiddlewareApi.Migrations
 {
     [DbContext(typeof(MiddlewareDbContext))]
-    partial class MiddlewareDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250402082226_SourceCodeAddedin_service")]
+    partial class SourceCodeAddedin_service
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

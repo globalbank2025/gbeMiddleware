@@ -36,5 +36,9 @@ namespace GBEMiddlewareApi.Models
         [Required(ErrorMessage = "Product Code is required.")]
         [DefaultValue("FTRQ")]
         public string ProductCode { get; set; } = "FTRQ";
+        
+        [Required(ErrorMessage = "Source Code is required.")]
+        [DefaultValue("TLB")]
+        public string SourceCode { get; set; } = "TLB";
     }
 }
